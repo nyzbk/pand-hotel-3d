@@ -41,7 +41,7 @@ export const InteractiveBento: React.FC<InteractiveBentoProps> = ({ onOpenBookin
               <div className="flex items-center justify-between border-b border-[#CCA65B]/20 pb-4 mb-6">
                 <span className="text-[11px] font-mono text-[#CCA65B] tracking-widest uppercase flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-[#CCA65B]" />
-                  SOJOURN & ROMANCE CONFIGURATOR
+                  LUXURY SUITE & SOJOURN PLANNER
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-[#CCA65B]/20 text-[#CCA65B] text-[10px] font-mono font-bold">
                   BRUGES CONCIERGE
