@@ -1,72 +1,88 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ChevronRight, ChevronDown, Sparkles, Award } from 'lucide-react';
+import React, { useEffect, useRef, useState, useTransition } from 'react';
+import { useScroll, useSpring, useTransform, motion } from 'framer-motion';
+import { ArrowUpRight, Compass, ShieldCheck, Sparkles } from 'lucide-react';
 
 interface HeroProps {
-  totalFrames?: number;
-  onOpenBooking: (suiteName?: string) => void;
+  onOpenBooking: () => void;
 }
 
-export const Hero: React.FC<HeroProps> = ({
-  totalFrames = 60,
-  onOpenBooking
-}) => {
+const TOTAL_FRAMES = 240;
+
+export const Hero: React.FC<HeroProps> = ({ onOpenBooking }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imagesRef = useRef<HTMLImageElement[]>([]);
   const currentFrameRef = useRef<number>(1);
+  const [, startTransition] = useTransition();
 
-  const [, setCurrentFrame] = useState<number>(1);
-  const [scrollProgress, setScrollProgress] = useState<number>(0);
-  const [activeChapter, setActiveChapter] = useState<string>('The 18th-Century Carriage Courtyard');
-  const [isLoaded, setIsLoaded] = useState<boolean>(false);
+  const [, setIsLoaded] = useState(false);
+  const [loadCount, setLoadCount] = useState(0);
 
+  // Jack Roberts spring physics: stiffness: 100, damping: 30
+  const { scrollYProgress } = useScroll({
+    target: containerRef,
+    offset: ['start start', 'end end'],
+  });
+
+  const smoothProgress = useSpring(scrollYProgress, {
+    stiffness: 100,
+    damping: 30,
+    restDelta: 0.0001,
+  });
+
+  // Staged narrative typography opacities across 240 frames
+  const stage1Opacity = useTransform(smoothProgress, [0, 0.18, 0.26], [1, 1, 0]);
+  const stage1Y = useTransform(smoothProgress, [0, 0.22], [0, -35]);
+
+  const stage2Opacity = useTransform(smoothProgress, [0.26, 0.34, 0.46, 0.54], [0, 1, 1, 0]);
+  const stage2Y = useTransform(smoothProgress, [0.26, 0.34, 0.46, 0.54], [35, 0, 0, -35]);
+
+  const stage3Opacity = useTransform(smoothProgress, [0.54, 0.62, 0.74, 0.82], [0, 1, 1, 0]);
+  const stage3Y = useTransform(smoothProgress, [0.54, 0.62, 0.74, 0.82], [35, 0, 0, -35]);
+
+  const stage4Opacity = useTransform(smoothProgress, [0.82, 0.90, 1], [0, 1, 1]);
+  const stage4Y = useTransform(smoothProgress, [0.82, 0.90], [35, 0]);
+
+  // Frame 1 immediate load + progressive background batching
   useEffect(() => {
-    const total = totalFrames;
-    const imgs: HTMLImageElement[] = new Array(total);
+    const imgs: HTMLImageElement[] = new Array(TOTAL_FRAMES);
 
-    // 1. Immediately fetch Frame 1 (<100ms first paint)
     const firstImg = new Image();
-    firstImg.src = `/frames/frame_0001.webp?v=fast-v2`;
+    firstImg.src = `/frames/frame_0001.webp?v=240`;
     firstImg.onload = () => {
       imgs[0] = firstImg;
       setIsLoaded(true);
+      setLoadCount(1);
       renderFrame(1);
 
-      // 2. Progressive non-blocking preload for frames 2..total in small smooth batches
-      let nextIdx = 2;
-      const loadNextBatch = () => {
-        const batchSize = 6;
-        for (let b = 0; b < batchSize && nextIdx <= total; b++, nextIdx++) {
-          const idx = nextIdx;
+      let nextIndex = 2;
+      const loadBatch = () => {
+        const batchSize = 10;
+        for (let i = 0; i < batchSize && nextIndex <= TOTAL_FRAMES; i++, nextIndex++) {
+          const idx = nextIndex;
           const img = new Image();
-          const frameStr = String(idx).padStart(4, '0');
-          img.src = `/frames/frame_${frameStr}.webp?v=fast-v2`;
+          const frameNum = String(idx).padStart(4, '0');
+          img.src = `/frames/frame_${frameNum}.webp?v=240`;
           img.onload = () => {
+            imgs[idx - 1] = img;
+            setLoadCount((prev) => prev + 1);
             if (currentFrameRef.current === idx) {
               renderFrame(idx);
             }
           };
           imgs[idx - 1] = img;
         }
-        if (nextIdx <= total) {
-          setTimeout(loadNextBatch, 15);
+        if (nextIndex <= TOTAL_FRAMES) {
+          setTimeout(loadBatch, 15);
         }
       };
-      loadNextBatch();
-    };
-    firstImg.onerror = () => {
-      setIsLoaded(true);
+      loadBatch();
     };
     imgs[0] = firstImg;
     imagesRef.current = imgs;
-    const handleResize = () => {
-      renderFrame(currentFrameRef.current);
-    };
+  }, []);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [totalFrames]);
-
+  // Canvas COVER rendering algorithm
   const renderFrame = (frameIndex: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -75,199 +91,211 @@ export const Hero: React.FC<HeroProps> = ({
 
     let img = imagesRef.current[frameIndex - 1];
     if (!img || !img.complete || img.naturalWidth === 0) {
-      for (let offset = 1; offset < totalFrames; offset++) {
-        const prev = imagesRef.current[frameIndex - 1 - offset];
-        if (prev && prev.complete && prev.naturalWidth > 0) {
-          img = prev;
-          break;
-        }
-        const next = imagesRef.current[frameIndex - 1 + offset];
-        if (next && next.complete && next.naturalWidth > 0) {
-          img = next;
+      for (let i = frameIndex - 1; i >= 0; i--) {
+        if (imagesRef.current[i] && imagesRef.current[i].complete && imagesRef.current[i].naturalWidth > 0) {
+          img = imagesRef.current[i];
           break;
         }
       }
     }
-    if (!img || !img.complete) return;
+    if (!img || !img.complete || img.naturalWidth === 0) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
 
-    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
+    if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+      canvas.width = cw * dpr;
+      canvas.height = ch * dpr;
     }
 
     ctx.save();
     ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
 
-    const imgRatio = 16 / 9;
-    const screenRatio = width / height;
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const canvasRatio = cw / ch;
 
-    let drawWidth = width;
-    let drawHeight = height;
-    let offsetX = 0;
-    let offsetY = 0;
+    let drawW: number;
+    let drawH: number;
+    let offsetX: number;
+    let offsetY: number;
 
-    if (screenRatio > imgRatio) {
-      drawWidth = width;
-      drawHeight = width / imgRatio;
-      offsetY = (height - drawHeight) / 2;
+    if (canvasRatio > imgRatio) {
+      drawW = cw;
+      drawH = cw / imgRatio;
+      offsetX = 0;
+      offsetY = (ch - drawH) / 2;
     } else {
-      drawHeight = height;
-      drawWidth = height * imgRatio;
-      offsetX = (width - drawWidth) / 2;
+      drawW = ch * imgRatio;
+      drawH = ch;
+      offsetX = (cw - drawW) / 2;
+      offsetY = 0;
     }
 
-    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-
-    // Subtle dark gradient for high-contrast typography
-    const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, 'rgba(11, 10, 9, 0.50)');
-    gradient.addColorStop(0.5, 'rgba(11, 10, 9, 0.20)');
-    gradient.addColorStop(1, 'rgba(11, 10, 9, 0.88)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-
+    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
     ctx.restore();
   };
 
+  // Sync canvas with spring physics
   useEffect(() => {
-    const handleScroll = () => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const scrollableDistance = rect.height - window.innerHeight;
-      const currentScroll = -rect.top;
-
-      let progress = currentScroll / scrollableDistance;
-      progress = Math.max(0, Math.min(1, progress));
-      setScrollProgress(progress);
-
-      const frameNumber = Math.max(1, Math.min(totalFrames, Math.floor(progress * (totalFrames - 1)) + 1));
-      currentFrameRef.current = frameNumber;
-      setCurrentFrame(frameNumber);
-      renderFrame(frameNumber);
-
-      if (progress < 0.33) {
-        setActiveChapter('The 18th-Century Carriage Courtyard');
-      } else if (progress < 0.66) {
-        setActiveChapter('The Louis XVI Fireplace Salon');
-      } else if (progress < 0.88) {
-        setActiveChapter('Champagne Breakfast Veranda');
-      } else {
-        setActiveChapter('Canal-View Heritage Suite');
+    const unsubscribe = smoothProgress.on('change', (v) => {
+      const targetFrame = Math.min(
+        TOTAL_FRAMES,
+        Math.max(1, Math.floor(v * (TOTAL_FRAMES - 1)) + 1)
+      );
+      if (targetFrame !== currentFrameRef.current) {
+        currentFrameRef.current = targetFrame;
+        startTransition(() => {
+          renderFrame(targetFrame);
+        });
       }
+    });
+
+    return () => unsubscribe();
+  }, [smoothProgress]);
+
+  // Window resize handler
+  useEffect(() => {
+    const handleResize = () => {
+      renderFrame(currentFrameRef.current);
     };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [totalFrames]);
-
-  const chapters = [
-    { label: 'Carriage Courtyard', range: [0, 0.33] },
-    { label: 'Louis XVI Salon', range: [0.33, 0.66] },
-    { label: 'Champagne Veranda', range: [0.66, 0.88] },
-    { label: 'Canal Suite', range: [0.88, 1.0] }
-  ];
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   return (
-    <div id="carriage-tour" ref={containerRef} className="relative h-[450vh] bg-[#0b0a09]">
-      {/* Sticky Hero Canvas */}
+    <div ref={containerRef} className="relative h-[400vh] bg-[#10171E] text-[#F5EFE6]">
+      {/* Sticky 100vh Fullscreen Viewport */}
       <div className="sticky top-0 h-screen w-full overflow-hidden flex flex-col justify-between">
+        {/* Background Neural Canvas */}
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+          className="absolute inset-0 w-full h-full object-cover z-0 pointer-events-none"
         />
 
-        {/* Top Header Overlay Bar */}
-        <div className="relative z-10 pt-28 px-4 sm:px-8 max-w-7xl mx-auto w-full flex flex-col items-center text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-stone-900/85 backdrop-blur-md border border-amber-600/30 text-amber-300 text-xs font-medium tracking-widest uppercase mb-4 shadow-xl">
-            <Award className="w-3.5 h-3.5 text-amber-400" />
-            <span>Small Luxury Hotels of the World · Bruges</span>
+        {/* Cinematic Candlelight Mahogany & Canal Twilight Vignette */}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#10171E]/95 via-[#10171E]/40 to-[#10171E]/80 pointer-events-none z-10" />
+
+        {/* 12-Column Architectural Hairline Grid Overlay */}
+        <div className="absolute inset-0 pointer-events-none z-15 opacity-[0.08] grid grid-cols-6 md:grid-cols-12 max-w-[1600px] mx-auto px-6">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="border-r border-[#CCA65B] h-full" />
+          ))}
+        </div>
+
+        {/* Top Telemetry Header */}
+        <div className="relative z-20 pt-24 px-6 md:px-12 flex justify-between items-start max-w-[1600px] mx-auto w-full">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#CCA65B]/15 border border-[#CCA65B]/30 text-[#CCA65B] text-[11px] font-mono tracking-widest uppercase">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#CCA65B] animate-ping" />
+              SMALL LUXURY HOTELS OF THE WORLD
+            </span>
+            <span className="hidden md:inline text-[11px] font-mono text-[#8A959E]">
+              PANDREITJE 16 • BRUGES, BELGIUM
+            </span>
           </div>
 
-          <h1 className="text-3xl sm:text-5xl lg:text-6xl font-serif font-light text-white tracking-tight max-w-4xl leading-[1.15] drop-shadow-md">
-            An 18th-Century Carriage House Reborn in the Heart of Bruges
-          </h1>
-
-          <p className="mt-4 text-stone-200 text-sm sm:text-base max-w-2xl font-light tracking-wide drop-shadow">
-            Only 26 individually styled suites steps from the Rozenhoedkaai canal. Warmed by authentic open fireplaces, Ralph Lauren fabrics, and timeless Flemish hospitality.
-          </p>
-
-          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 mt-6">
-            <button
-              onClick={() => onOpenBooking('The Ralph Lauren Master Suite')}
-              className="px-6 py-3 rounded-full bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 text-stone-950 font-semibold text-xs tracking-wider uppercase shadow-xl hover:from-amber-500 hover:to-amber-400 transition-all flex items-center gap-2"
-            >
-              <span>Reserve Boutique Suite</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => onOpenBooking('Concierge Inquiry')}
-              className="px-6 py-3 rounded-full bg-stone-900/80 backdrop-blur-md border border-stone-700 text-white font-medium text-xs tracking-wider uppercase hover:border-amber-500 transition-all flex items-center gap-2"
-            >
-              <span>Private Concierge Services</span>
-            </button>
+          <div className="text-right font-mono text-[11px] text-[#8A959E]">
+            <div className="text-[#CCA65B] font-semibold">240-FRAME FLEMISH CANAL SCRUB</div>
+            <div>BUFFER: {loadCount}/{TOTAL_FRAMES} FRAMES ({Math.round((loadCount / TOTAL_FRAMES) * 100)}%)</div>
           </div>
         </div>
 
-        {/* Center Chapter Callout Overlay */}
-        <div className="relative z-10 px-4 sm:px-8 max-w-7xl mx-auto w-full my-auto flex flex-col items-start pointer-events-none">
-          <div className="bg-stone-950/85 backdrop-blur-md border border-amber-600/25 rounded-2xl p-5 sm:p-6 max-w-md shadow-2xl transition-all duration-500 pointer-events-auto">
-            <div className="flex items-center gap-2 text-[10px] tracking-[0.25em] text-amber-400 uppercase font-semibold">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Interactive Carriage Walkthrough</span>
+        {/* Center Dynamic Staged Narrative */}
+        <div className="relative z-20 px-6 md:px-12 max-w-[1600px] mx-auto w-full my-auto pointer-events-none">
+          {/* Stage 1: 18th-Century Bruges Carriage House */}
+          <motion.div
+            style={{ opacity: stage1Opacity, y: stage1Y }}
+            className="max-w-4xl"
+          >
+            <div className="text-[12px] font-mono tracking-[0.25em] text-[#CCA65B] uppercase mb-4 flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-[#CCA65B]" />
+              ESTABLISHED 1780 • MEDIEVAL CANAL PRECINCT
             </div>
-            <h3 className="text-xl sm:text-2xl font-serif text-white mt-1">
-              {activeChapter}
-            </h3>
-            <p className="text-xs sm:text-sm text-stone-300 mt-2 leading-relaxed">
-              {scrollProgress < 0.33 &&
-                'A private 18th-century cobblestone entrance secluded from the city bustling streets, welcoming discerning international travelers for over four decades.'}
-              {scrollProgress >= 0.33 && scrollProgress < 0.66 &&
-                'The heart of the residence: surrounded by over 1,000 antiquarian books, crackling hearth flames, and authentic Louis XVI furnishings.'}
-              {scrollProgress >= 0.66 && scrollProgress < 0.88 &&
-                'Our tranquil glass-roofed garden veranda serving farm eggs cooked to order, artisanal Belgian waffles, and champagne with silver teapots.'}
-              {scrollProgress >= 0.88 &&
-                'Romantic private suites adorned with Ralph Lauren upholstery, whirlpool baths, and peaceful views over the Pandreitje canal.'}
+            <h1 className="font-['Cinzel_Decorative',serif] text-[40px] md:text-[76px] leading-[0.92] tracking-tight text-[#F5EFE6]">
+              A romantic sanctuary in medieval Bruges.
+            </h1>
+            <p className="mt-6 text-[16px] md:text-[20px] text-[#8A959E] max-w-2xl font-light leading-relaxed font-['Cardo',serif]">
+              An 18th-century carriage mansion tucked beside the tranquil Rozenhoedkaai canal. Decorated in the timeless country manor aesthetic of Ralph Lauren with genuine Louis XVI period antiques.
             </p>
-          </div>
+          </motion.div>
+
+          {/* Stage 2: Ralph Lauren Fabrics & Louis XVI Antiques */}
+          <motion.div
+            style={{ opacity: stage2Opacity, y: stage2Y }}
+            className="max-w-3xl"
+          >
+            <div className="text-[12px] font-mono tracking-[0.25em] text-[#CCA65B] uppercase mb-4 flex items-center gap-2">
+              <Compass className="w-3.5 h-3.5 text-[#CCA65B]" />
+              26 INTIMATE BESPOKE CHAMBERS
+            </div>
+            <h2 className="font-['Cinzel_Decorative',serif] text-[36px] md:text-[68px] leading-[0.92] text-[#F5EFE6]">
+              Every room a collector's salon.
+            </h2>
+            <p className="mt-6 text-[16px] md:text-[19px] text-[#8A959E] font-light leading-relaxed font-['Cardo',serif]">
+              Canopied four-poster beds draped in English chintz and Ralph Lauren wools, marble en-suite bathrooms, heated towel rails, and whispering grandfather clocks.
+            </p>
+          </motion.div>
+
+          {/* Stage 3: Champagne Breakfast by Candlelight */}
+          <motion.div
+            style={{ opacity: stage3Opacity, y: stage3Y }}
+            className="max-w-3xl"
+          >
+            <div className="text-[12px] font-mono tracking-[0.25em] text-[#CCA65B] uppercase mb-4 flex items-center gap-2">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#CCA65B]" />
+              LEGENDARY FLEMISH HOSPITALITY
+            </div>
+            <h2 className="font-['Cinzel_Decorative',serif] text-[36px] md:text-[68px] leading-[0.92] text-[#F5EFE6]">
+              Champagne under leaded stained glass.
+            </h2>
+            <p className="mt-6 text-[16px] md:text-[19px] text-[#8A959E] font-light leading-relaxed font-['Cardo',serif]">
+              Full waiter-served breakfast prepared on an antique cast-iron AGA stove: freshly baked croissants, warm Belgian waffles, farm eggs cooked to order, and chilled vintage champagne.
+            </p>
+          </motion.div>
+
+          {/* Stage 4: Reserve Your Canal-Side Sanctuary */}
+          <motion.div
+            style={{ opacity: stage4Opacity, y: stage4Y }}
+            className="max-w-3xl pointer-events-auto"
+          >
+            <div className="text-[12px] font-mono tracking-[0.25em] text-[#CCA65B] uppercase mb-4">
+              HISTORIC BRUGES SOJOURN
+            </div>
+            <h2 className="font-['Cinzel_Decorative',serif] text-[36px] md:text-[68px] leading-[0.92] text-[#F5EFE6]">
+              Your keys await at The Pand.
+            </h2>
+            <p className="mt-6 text-[16px] md:text-[19px] text-[#8A959E] font-light leading-relaxed font-['Cardo',serif]">
+              Step out into cobblestone lanes, private horse-drawn carriage tours, and historic Flemish art museums.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-4">
+              <button
+                onClick={onOpenBooking}
+                className="group relative inline-flex items-center gap-3 px-8 py-4 rounded-xl bg-[#CCA65B] text-[#10171E] font-bold text-[14px] uppercase tracking-wider transition-all duration-300 hover:bg-[#d8b56f] shadow-lg shadow-[#CCA65B]/25 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <span>Reserve Chamber or Suite</span>
+                <ArrowUpRight className="w-4 h-4 transition-transform group-hover:translate-x-1 group-hover:-translate-y-1" />
+              </button>
+              <a
+                href="tel:+3250340666"
+                className="px-6 py-4 rounded-xl border border-[#CCA65B]/30 text-[#F5EFE6] font-mono text-[13px] hover:bg-[#CCA65B]/10 transition-colors"
+              >
+                +32 50 34 06 66
+              </a>
+            </div>
+          </motion.div>
         </div>
 
-        {/* Bottom HUD Bar */}
-        <div className="relative z-10 pb-8 px-4 sm:px-8 max-w-7xl mx-auto w-full">
-          <div className="bg-stone-950/90 backdrop-blur-md border border-stone-800/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-2xl">
-            {/* Chapters progression */}
-            <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-              {chapters.map((ch, idx) => {
-                const isActive = scrollProgress >= ch.range[0] && scrollProgress <= ch.range[1];
-                return (
-                  <div
-                    key={idx}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all whitespace-nowrap ${
-                      isActive
-                        ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-medium'
-                        : 'text-stone-400 hover:text-stone-300'
-                    }`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                    <span>{ch.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Scroll Indicator */}
-            <div className="flex items-center gap-3 text-xs text-stone-400 shrink-0">
-              <span className="hidden md:inline">Scroll to Wander The Hotel</span>
-              <div className="w-6 h-6 rounded-full border border-amber-500/30 flex items-center justify-center text-amber-400 animate-bounce">
-                <ChevronDown className="w-3.5 h-3.5" />
-              </div>
-            </div>
+        {/* Bottom Status Ribbon */}
+        <div className="relative z-20 pb-8 px-6 md:px-12 max-w-[1600px] mx-auto w-full flex justify-between items-end border-t border-[#CCA65B]/15 pt-4 text-[12px] font-mono text-[#8A959E]">
+          <div className="flex items-center gap-6">
+            <span className="text-[#CCA65B]">SMALL LUXURY HOTELS (SLH)</span>
+            <span className="hidden md:inline">PANDREITJE 16 • BRUGES HISTORIC CITY CENTRE</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span>SCROLL TO ENTER HOTEL</span>
+            <span className="animate-bounce">↓</span>
           </div>
         </div>
       </div>

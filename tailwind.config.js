@@ -21,6 +21,15 @@ export default {
         'display': ['Cinzel Decorative', 'serif'],
         'sub': ['Marcellus', 'serif'],
         'body': ['Cardo', 'serif']
+      },
+      keyframes: {
+        marquee: {
+          '0%': { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-50%)' },
+        },
+      },
+      animation: {
+        marquee: 'marquee 30s linear infinite',
       }
     },
   },
